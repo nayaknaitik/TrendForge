@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3000"]
 
     # ── Database ────────────────────────────────────────────────────────
-    database_url: str = "postgresql+asyncpg://trendforge:trendforge@localhost:5432/trendforge"
+    database_url: str = "postgresql+asyncpg://trendforge:CHANGE_ME_DB_PASSWORD@localhost:5432/trendforge"
     db_pool_size: int = 20
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     redis_cache_ttl: int = 300  # 5 minutes default
 
     # ── Auth ────────────────────────────────────────────────────────────
-    jwt_secret_key: str = "CHANGE-ME-IN-PRODUCTION-use-openssl-rand-hex-64"
+    jwt_secret_key: str = "CHANGE_ME_JWT_SECRET_64_HEX"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
