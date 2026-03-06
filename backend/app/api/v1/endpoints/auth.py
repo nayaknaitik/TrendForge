@@ -1,0 +1,98 @@
+"""
+Authentication API endpoints.
+
+POST /auth/register — Create new account
+POST /auth/login    — Get access + refresh tokens  
+POST /auth/refresh  — Refresh access token
+"""
+
+from uuid import UUID
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.exceptions import AuthenticationError, ValidationError
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    hash_password,
+    verify_password,
+)
+from app.db.session import get_db
+from app.models.models import User
+from app.schemas.schemas import (
+    AuthLogin,
+    AuthRefresh,
+    AuthRegister,
+    AuthTokenResponse,
+    UserResponse,
+)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+settings = get_settings()
+
+
+@router.post("/register", response_model=UserResponse, status_code=201)
+async def register(data: AuthRegister, db: AsyncSession = Depends(get_db)):
+    """Register a new user account."""
+    # Check for existing user
+    result = await db.execute(select(User).where(User.email == data.email))
+    if result.scalar_one_or_none():
+        raise ValidationError("Email already registered", field="email")
+
+    user = User(
+        email=data.email,
+        hashed_password=hash_password(data.password),
+        full_name=data.full_name,
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@router.post("/login", response_model=AuthTokenResponse)
+async def login(data: AuthLogin, db: AsyncSession = Depends(get_db)):
+    """Authenticate and receive tokens."""
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+
+    if not user or not verify_password(data.password, user.hashed_password):
+        raise AuthenticationError("Invalid email or password")
+
+    if not user.is_active:
+        raise AuthenticationError("Account is deactivated")
+
+    return AuthTokenResponse(
+        access_token=create_access_token(str(user.id), {"tier": user.tier}),
+        refresh_token=create_refresh_token(str(user.id)),
+        expires_in=settings.jwt_access_token_expire_minutes * 60,
+    )
+
+
+@router.post("/refresh", response_model=AuthTokenResponse)
+async def refresh_token(data: AuthRefresh, db: AsyncSession = Depends(get_db)):
+    """Refresh an access token."""
+    try:
+        payload = decode_token(data.refresh_token)
+    except Exception:
+        raise AuthenticationError("Invalid refresh token")
+
+    if payload.get("type") != "refresh":
+        raise AuthenticationError("Invalid token type")
+
+    user_id = payload.get("sub")
+    result = await db.execute(select(User).where(User.id == UUID(user_id)))
+    user = result.scalar_one_or_none()
+
+    if not user or not user.is_active:
+        raise AuthenticationError("User not found or deactivated")
+
+    return AuthTokenResponse(
+        access_token=create_access_token(str(user.id), {"tier": user.tier}),
+        refresh_token=create_refresh_token(str(user.id)),
+        expires_in=settings.jwt_access_token_expire_minutes * 60,
+    )

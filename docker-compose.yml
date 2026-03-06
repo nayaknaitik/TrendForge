@@ -1,0 +1,115 @@
+version: "3.9"
+
+services:
+  # -------------------------------------------------------
+  # PostgreSQL + pgvector
+  # -------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: trendforge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trendforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trendforge_dev}
+      POSTGRES_DB: trendforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trendforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------
+  # Redis
+  # -------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: trendforge-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------
+  # Backend (FastAPI)
+  # -------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: trendforge-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://trendforge:${POSTGRES_PASSWORD:-trendforge_dev}@postgres:5432/trendforge
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+      CORS_ORIGINS: '["http://localhost:3000","https://trendforge.app"]'
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # -------------------------------------------------------
+  # Frontend (Next.js)
+  # -------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: trendforge-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+
+  # -------------------------------------------------------
+  # Nginx reverse proxy
+  # -------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: trendforge-nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infrastructure/nginx/ssl:/etc/nginx/ssl:ro
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
